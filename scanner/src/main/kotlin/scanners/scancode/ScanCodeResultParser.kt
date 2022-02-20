@@ -28,6 +28,9 @@ import java.io.File
 import java.time.Instant
 import java.util.regex.Pattern
 
+import kotlin.math.max
+import kotlin.math.min
+
 import org.ossreviewtoolkit.model.CopyrightFinding
 import org.ossreviewtoolkit.model.LicenseFinding
 import org.ossreviewtoolkit.model.OrtIssue
@@ -38,6 +41,7 @@ import org.ossreviewtoolkit.utils.common.textValueOrEmpty
 import org.ossreviewtoolkit.utils.spdx.SpdxConstants
 import org.ossreviewtoolkit.utils.spdx.SpdxConstants.LICENSE_REF_PREFIX
 import org.ossreviewtoolkit.utils.spdx.calculatePackageVerificationCode
+import org.ossreviewtoolkit.utils.spdx.toSpdx
 
 private data class LicenseExpression(
     val expression: String,
@@ -201,7 +205,7 @@ private fun getLicenseFindings(result: JsonNode, parseExpressions: Boolean): Lis
         }
     }
 
-    return licenseFindings
+    return associateLicensesWithExceptions(licenseFindings)
 }
 
 /**
@@ -244,6 +248,53 @@ internal fun replaceLicenseKeys(licenseExpression: String, replacements: Collect
 
         result
     }
+
+private const val LICENSES_WITH_EXCEPTIONS_TOLERANCE_LINES = 5
+
+internal fun associateLicensesWithExceptions(findings: List<LicenseFinding>): List<LicenseFinding> {
+    val otherFindings = mutableListOf<LicenseFinding>()
+
+    val apacheLicenses = mutableListOf<LicenseFinding>()
+    val llvmExceptions = mutableListOf<LicenseFinding>()
+
+    findings.forEach {
+        when (it.license.toString()) {
+            "Apache-2.0" -> apacheLicenses += it
+            "LLVM-exception" -> llvmExceptions += it
+            else -> otherFindings += it
+        }
+    }
+
+    val fixedApacheLicenses = apacheLicenses.map { apache ->
+        val llvm = llvmExceptions.filter { it.location.path == apache.location.path }
+            .map { it to it.location.distanceTo(apache.location) }
+            .sortedBy { it.second }
+            .firstOrNull { it.second <= LICENSES_WITH_EXCEPTIONS_TOLERANCE_LINES }
+            ?.first
+
+        if (llvm != null) {
+            llvmExceptions.remove(llvm)
+
+            // Fixup an "Apache-2.0" license finding with a nearby "LLVM-exception".
+            apache.copy(
+                license = "Apache-2.0 WITH LLVM-exception".toSpdx(),
+                location = apache.location.copy(
+                    startLine = min(apache.location.startLine, llvm.location.startLine),
+                    endLine = max(apache.location.endLine, llvm.location.endLine)
+                )
+            )
+        } else {
+            apache
+        }
+    }
+
+    val fixedLlvmExceptions = llvmExceptions.map { llvm ->
+        // Fixup an "LLVM-exception" without a nearby "Apache-2.0" license.
+        llvm.copy(license = "Apache-2.0 WITH LLVM-exception".toSpdx())
+    }
+
+    return otherFindings + fixedApacheLicenses + fixedLlvmExceptions
+}
 
 /**
  * Get the copyright findings from the given [result].
