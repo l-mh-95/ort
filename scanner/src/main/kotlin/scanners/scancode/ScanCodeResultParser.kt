@@ -40,6 +40,7 @@ import org.ossreviewtoolkit.model.TextLocation
 import org.ossreviewtoolkit.utils.common.textValueOrEmpty
 import org.ossreviewtoolkit.utils.spdx.SpdxConstants
 import org.ossreviewtoolkit.utils.spdx.SpdxConstants.LICENSE_REF_PREFIX
+import org.ossreviewtoolkit.utils.spdx.SpdxLicenseException
 import org.ossreviewtoolkit.utils.spdx.calculatePackageVerificationCode
 import org.ossreviewtoolkit.utils.spdx.toSpdx
 
@@ -252,48 +253,58 @@ internal fun replaceLicenseKeys(licenseExpression: String, replacements: Collect
 private const val LICENSES_WITH_EXCEPTIONS_TOLERANCE_LINES = 5
 
 internal fun associateLicensesWithExceptions(findings: List<LicenseFinding>): List<LicenseFinding> {
-    val otherFindings = mutableListOf<LicenseFinding>()
+    val (exceptions, licenses) = findings.partition { SpdxLicenseException.forId(it.license.toString()) != null }
 
-    val apacheLicenses = mutableListOf<LicenseFinding>()
-    val llvmExceptions = mutableListOf<LicenseFinding>()
+    val remainingExceptions = exceptions.toMutableList()
+    val fixedLicenses = licenses.toMutableList()
 
-    findings.forEach {
-        when (it.license.toString()) {
-            "Apache-2.0" -> apacheLicenses += it
-            "LLVM-exception" -> llvmExceptions += it
-            else -> otherFindings += it
+    val i = remainingExceptions.iterator()
+
+    while (i.hasNext()) {
+        val exception = i.next()
+
+        // Determine all licenses exception is applicable to.
+        val applicableLicenses = SpdxLicenseException.mapping[exception.license.toString()].orEmpty().map { it.id }
+
+        // Determine applicable license findings from the same path.
+        val applicableLicenseFindings = licenses.filter {
+            it.location.path == exception.location.path && it.license.toString() in applicableLicenses
         }
-    }
 
-    val fixedApacheLicenses = apacheLicenses.map { apache ->
-        val llvm = llvmExceptions.filter { it.location.path == apache.location.path }
-            .map { it to it.location.distanceTo(apache.location) }
+        // Find the closest license within the tolerance.
+        val associatedLicenseFinding = applicableLicenseFindings
+            .map { it to it.location.distanceTo(exception.location) }
             .sortedBy { it.second }
             .firstOrNull { it.second <= LICENSES_WITH_EXCEPTIONS_TOLERANCE_LINES }
             ?.first
 
-        if (llvm != null) {
-            llvmExceptions.remove(llvm)
-
-            // Fixup an "Apache-2.0" license finding with a nearby "LLVM-exception".
-            apache.copy(
-                license = "Apache-2.0 WITH LLVM-exception".toSpdx(),
-                location = apache.location.copy(
-                    startLine = min(apache.location.startLine, llvm.location.startLine),
-                    endLine = max(apache.location.endLine, llvm.location.endLine)
+        if (associatedLicenseFinding != null) {
+            // Add the fixed-up license with the exception.
+            fixedLicenses += associatedLicenseFinding.copy(
+                license = "${associatedLicenseFinding.license} WITH ${exception.license}".toSpdx(),
+                location = associatedLicenseFinding.location.copy(
+                    startLine = min(associatedLicenseFinding.location.startLine, exception.location.startLine),
+                    endLine = max(associatedLicenseFinding.location.endLine, exception.location.endLine)
                 )
             )
-        } else {
-            apache
+
+            // Remove the original license and the stand-alone exception.
+            fixedLicenses.remove(associatedLicenseFinding)
+            i.remove()
         }
     }
 
-    val fixedLlvmExceptions = llvmExceptions.map { llvm ->
-        // Fixup an "LLVM-exception" without a nearby "Apache-2.0" license.
-        llvm.copy(license = "Apache-2.0 WITH LLVM-exception".toSpdx())
+    remainingExceptions.forEach { exception ->
+        // Determine all licenses exception is applicable to.
+        val applicableLicenses = SpdxLicenseException.mapping[exception.license.toString()].orEmpty().map { it.id }
+
+        // Associate all applicable licenses with the remaining exception.
+        applicableLicenses.mapTo(fixedLicenses) { license ->
+            exception.copy(license = "$license WITH ${exception.license}".toSpdx())
+        }
     }
 
-    return otherFindings + fixedApacheLicenses + fixedLlvmExceptions
+    return fixedLicenses
 }
 
 /**

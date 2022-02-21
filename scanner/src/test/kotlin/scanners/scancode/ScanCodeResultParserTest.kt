@@ -654,12 +654,13 @@ class ScanCodeResultParserTest : FreeSpec({
         "fixup remaining exceptions" {
             associateLicensesWithExceptions(
                 listOf(
-                    LicenseFinding("Apache-2.0", TextLocation("file", 1)),
-                    LicenseFinding("LLVM-exception", TextLocation("file", 100))
+                    LicenseFinding("GPL-2.0-only", TextLocation("file", 1)),
+                    LicenseFinding("389-exception", TextLocation("file", 100))
                 )
             ) should containExactlyInAnyOrder(
-                LicenseFinding("Apache-2.0", TextLocation("file", 1)),
-                LicenseFinding("Apache-2.0 WITH LLVM-exception", TextLocation("file", 100))
+                LicenseFinding("GPL-2.0-only", TextLocation("file", 1)),
+                LicenseFinding("GPL-2.0-only WITH 389-exception", TextLocation("file", 100)),
+                LicenseFinding("GPL-2.0-or-later WITH 389-exception", TextLocation("file", 100))
             )
         }
 
