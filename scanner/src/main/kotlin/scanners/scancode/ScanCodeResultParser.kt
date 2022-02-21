@@ -40,6 +40,7 @@ import org.ossreviewtoolkit.model.TextLocation
 import org.ossreviewtoolkit.utils.common.textValueOrEmpty
 import org.ossreviewtoolkit.utils.spdx.SpdxConstants
 import org.ossreviewtoolkit.utils.spdx.SpdxConstants.LICENSE_REF_PREFIX
+import org.ossreviewtoolkit.utils.spdx.SpdxLicenseException
 import org.ossreviewtoolkit.utils.spdx.calculatePackageVerificationCode
 import org.ossreviewtoolkit.utils.spdx.toSpdx
 
@@ -258,6 +259,12 @@ internal fun associateLicensesWithExceptions(findings: List<LicenseFinding>): Li
     val llvmExceptions = mutableListOf<LicenseFinding>()
 
     findings.forEach {
+        val exception = SpdxLicenseException.forId(it.license.toString())
+        if (exception != null) {
+            val applicableLicenses = SpdxLicenseException.mapping[exception]
+            
+        }
+
         when (it.license.toString()) {
             "Apache-2.0" -> apacheLicenses += it
             "LLVM-exception" -> llvmExceptions += it
